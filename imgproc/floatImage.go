@@ -19,17 +19,15 @@ import (
 // Each intensity plane is stored independently (rather than interleaving)
 // which is useful for (the cache locality of) operations which operate on one plane at a time.
 type FloatImage struct {
-	X, Y, Z       []float32 // intensity planes
-	Width, Height int       // dimensions
+	Ip            [3][]float32 // intensity planes
+	Width, Height int          // dimensions
 }
 
 // Construct a new FloatImage of the specified dimensions, with all pixels zero'd.
 func NewFloatImage(width, height int) *FloatImage {
 	area := width * height
 	return &FloatImage{
-		X:      make([]float32, area),
-		Y:      make([]float32, area),
-		Z:      make([]float32, area),
+		Ip:     [3][]float32{make([]float32, area), make([]float32, area), make([]float32, area)},
 		Width:  width,
 		Height: height,
 	}
@@ -50,7 +48,7 @@ func ImageToFloatImage(img image.Image) *FloatImage {
 			// r,g,b are alpha-pre-multiplied, so alpha can be ignored.
 			// TODO use YCrCb instead?
 			r, g, b, _ := img.At(xi+b.Min.X, yi+b.Min.Y).RGBA()
-			res.X[i], res.Y[i], res.Z[i] = float32(r), float32(g), float32(b)
+			res.Ip[0][i], res.Ip[1][i], res.Ip[2][i] = float32(r), float32(g), float32(b)
 		}
 	}
 
@@ -72,5 +70,125 @@ func (img *FloatImage) At(x, y int) color.Color {
 	}
 
 	i := x + y*img.Width
-	return color.RGBA{fti(img.X[i]), fti(img.Y[i]), fti(img.Z[i]), RGBA_MAX_I}
+	return color.RGBA{fti(img.Ip[0][i]), fti(img.Ip[1][i]), fti(img.Ip[2][i]), RGBA_MAX_I}
+}
+
+// A ConvKernel is a kernel (a NxN matrix) for a Convolution operation.
+// The NxN matrix is stored as a 1D array in row-major order.
+// (I.e. index-of(x,y) is (y*WIDTH + x))
+// In order to ensure the matrix can be centered on a pixel, 
+// the size of the matrix must be odd (i.e. N = 2R + 1, for some Radius R)
+// Thus, the matrix has (2*Radius + 1)^2 elements.
+// For example, a 3x3 matrix has radius of 1 and has 9 elements.
+type ConvKernel struct {
+	Kernel []float32
+	Radius int
+}
+
+// a convenience function for creating 3x3 convolution kernels.
+func NewConvKernel3(m11, m12, m13, m21, m22, m23, m31, m32, m33 float32) *ConvKernel {
+	return &ConvKernel{
+		Kernel: []float32{m11, m12, m13, m21, m22, m23, m31, m32, m33},
+		Radius: 3,
+	}
+}
+
+// a function for making sure a coord lies within plane bounds
+// e.g. by clamping the co-ord or by wrapping it around the plane.
+// input params are (index, max-index) ; output is the output-index.
+type planeExtension func(int, int) int
+
+// Clamp out-of-bounds pixels to nearest neighbour.
+func clampPlaneExtension(index, limit int) int {
+	if index >= limit {
+		index = limit - 1
+	} else if index < 0 {
+		index = 0
+	}
+	return index
+}
+
+// edge wrapping: wrap out-of-bounds pixels around the image.
+func wrapPlaneExtension(index, limit int) int { return index % limit }
+
+// helper function for convolving a single intensity plane.
+func convolvePlane(planePtr *[]float32, kernel *ConvKernel, width, height int, toPlaneCoords planeExtension) *[]float32 {
+
+	plane := *planePtr
+	radius := kernel.Radius
+	diameter := radius*2 + 1
+	res := make([]float32, width*height)
+
+	// for each pixel of the intensity plane:
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			index := y*width + x
+
+			// compute convolved value of the pixel:
+			resV := float32(0)
+			for yk := 0; yk < diameter; yk++ {
+				yp := toPlaneCoords(y+yk-radius, height)
+				for xk := 0; xk < diameter; xk++ {
+					xp := toPlaneCoords(x+xk-radius, width)
+					planeIndex := yp*width + xp
+					kernelIndex := yk*diameter + xk
+					resV += (plane[planeIndex] * kernel.Kernel[kernelIndex])
+				}
+			}
+			res[index] = resV
+		}
+	}
+
+	return &res
+}
+
+// Apply a convolution kernel to the image.
+// Creates a new image (does not modify the original).
+func (img *FloatImage) convolve(kernel *ConvKernel, px planeExtension) *FloatImage {
+
+	// convolve each plane independently:
+	res := new([3][]float32)
+	for i := 0; i < 3; i++ {
+		convolvePlane(&img.Ip[i], kernel, img.Width, img.Height, px)
+	}
+
+	return &FloatImage{
+		Ip:     *res,
+		Width:  img.Width,
+		Height: img.Height,
+	}
+}
+
+// Apply a convolution, in place, to the image.
+// Modifies the current image.
+func (img *FloatImage) convolveWith(kernel *ConvKernel, px planeExtension) {
+
+	// convolve each plane independently:
+	for i := 0; i < 3; i++ {
+		img.Ip[i] = *convolvePlane(&img.Ip[i], kernel, img.Width, img.Height, px)
+	}
+}
+
+// Apply a convolution kernel to the image, with Edge clamping.
+// Creates a new image (does not modify the original).
+func (img *FloatImage) ConvolveClamp(kernel *ConvKernel) *FloatImage {
+	return img.convolve(kernel, clampPlaneExtension)
+}
+
+// Apply a convolution kernel to the image, with Edge wrapping.
+// Creates a new image (does not modify the original).
+func (img *FloatImage) ConvolveWrap(kernel *ConvKernel) *FloatImage {
+	return img.convolve(kernel, wrapPlaneExtension)
+}
+
+// Apply a convolution, in place, to the image, with Edge clamping.
+// Modifies the current image.
+func (img *FloatImage) ConvolveClampWith(kernel *ConvKernel, px planeExtension) {
+	img.convolveWith(kernel, clampPlaneExtension)
+}
+
+// Apply a convolution, in place, to the image, with Edge wrapping.
+// Modifies the current image.
+func (img *FloatImage) ConvolveWrapWith(kernel *ConvKernel, px planeExtension) {
+	img.convolveWith(kernel, wrapPlaneExtension)
 }
