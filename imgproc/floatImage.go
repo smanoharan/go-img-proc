@@ -73,6 +73,14 @@ func (img *FloatImage) At(x, y int) color.Color {
 	return color.RGBA{fti(img.Ip[0][i]), fti(img.Ip[1][i]), fti(img.Ip[2][i]), RGBA_MAX_I}
 }
 
+func (img *FloatImage) Clone() *FloatImage {
+	res := NewFloatImage(img.Width, img.Height)
+	for i := 0; i < 3; i++ {
+		copy(res.Ip[i], img.Ip[i]) // NOTE: copy args are (dst, src)
+	}
+	return res
+}
+
 // A ConvKernel is a kernel (a NxN matrix) for a Convolution operation.
 // The NxN matrix is stored as a 1D array in row-major order.
 // (I.e. index-of(x,y) is (y*WIDTH + x))
@@ -191,4 +199,43 @@ func (img *FloatImage) ConvolveClampWith(kernel *ConvKernel, px planeExtension) 
 // Modifies the current image.
 func (img *FloatImage) ConvolveWrapWith(kernel *ConvKernel, px planeExtension) {
 	img.convolveWith(kernel, wrapPlaneExtension)
+}
+
+// a map function which operates on one pixel at a time
+type PixelMap func(vals ...float32) float32
+
+// Apply a PixelMap over each pixel over all images. 
+// Modifies the current image.
+// All images must have the same dimensions (this constraint is not checked).
+func (img *FloatImage) Apply(mapFn PixelMap, images ...*FloatImage) {
+
+	// obtain the number of args to the PixelMap fn
+	numImages := len(images) + 1 // + 1 for the current image
+	vals := make([]float32, numImages)
+
+	for layer := 0; layer < 3; layer++ {
+		for y := 0; y < img.Height; y++ {
+			for x := 0; x < img.Width; x++ {
+				index := y*img.Width + x
+
+				// copy image pixels into vals
+				vals[0] = img.Ip[layer][index]
+				for i := 0; i < numImages; i++ {
+					vals[i+1] = images[i].Ip[layer][index]
+				}
+
+				// apply the mapFunction
+				img.Ip[layer][index] = mapFn(vals...)
+			}
+		}
+	}
+}
+
+// Apply a PixelMap over each pixel over all images. 
+// Does not modify the current image.
+// All images must have the same dimensions (this constraint is not checked).
+func Apply(mapFn PixelMap, images ...*FloatImage) *FloatImage {
+	result := images[0].Clone()
+	result.Apply(mapFn, images[1:]...)
+	return result
 }
