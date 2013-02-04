@@ -62,10 +62,13 @@ func GaussianFilterKernel(radius int, variance float64) *ConvKernel {
 		}
 	}
 
-	return &ConvKernel{
+	// Normalize the kernel before returning
+	res := &ConvKernel{
 		Kernel: kernel,
 		Radius: radius,
 	}
+	res.Normalize()
+	return res
 
 }
 

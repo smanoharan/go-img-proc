@@ -12,6 +12,8 @@ import (
 	"math"
 )
 
+const TOLERANCE = float64(0.0000001) // for comparing floating point numbers
+
 // FloatImage represents an image consisting 3 independent intensity planes
 // (either RGB or YCrCb based on the original colorModel).
 // Each intensity plane consists of an array of intensities, 
@@ -97,7 +99,28 @@ type ConvKernel struct {
 func NewConvKernel3(m11, m12, m13, m21, m22, m23, m31, m32, m33 float32) *ConvKernel {
 	return &ConvKernel{
 		Kernel: []float32{m11, m12, m13, m21, m22, m23, m31, m32, m33},
-		Radius: 3,
+		Radius: 1, // 3x3 kernel has diameter=3, thus radius=1
+	}
+}
+
+// Normalize the ConvKernel such that sum of all entries in the kernel matrix is 1. 
+// If the current kernel entries sum to zero, no change is made.
+// Modifies the current kernel.
+func (k *ConvKernel) Normalize() {
+	diameter := k.Radius*2 + 1
+	area := diameter * diameter
+	sum := float32(0)
+	for i := 0; i < area; i++ {
+		sum += k.Kernel[i]
+	}
+
+	// only attempt to normalize if the sum is significantly
+	// different from both zero and one.
+	fSum := float64(sum)
+	if (math.Abs(fSum) >= TOLERANCE) && (math.Abs(fSum-1.0) >= TOLERANCE) { 
+		for i := 0; i < area; i++ {
+			k.Kernel[i] /= sum // normalize by dividing each entry
+		}
 	}
 }
 
@@ -239,3 +262,4 @@ func Apply(mapFn PixelMap, images ...*FloatImage) *FloatImage {
 	result.Apply(mapFn, images[1:]...)
 	return result
 }
+
