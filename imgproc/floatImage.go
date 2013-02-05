@@ -117,7 +117,7 @@ func (k *ConvKernel) Normalize() {
 	// only attempt to normalize if the sum is significantly
 	// different from both zero and one.
 	fSum := float64(sum)
-	if (math.Abs(fSum) >= TOLERANCE) && (math.Abs(fSum-1.0) >= TOLERANCE) { 
+	if (math.Abs(fSum) >= TOLERANCE) && (math.Abs(fSum-1.0) >= TOLERANCE) {
 		for i := 0; i < area; i++ {
 			k.Kernel[i] /= sum // normalize by dividing each entry
 		}
@@ -262,4 +262,3 @@ func Apply(mapFn PixelMap, images ...*FloatImage) *FloatImage {
 	result.Apply(mapFn, images[1:]...)
 	return result
 }
-
