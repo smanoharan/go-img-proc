@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/smanoharan/go-img-proc/imgproc"
@@ -17,21 +18,7 @@ import (
 	"os"
 )
 
-type ImageOp func(*imgproc.FloatImage) *imgproc.FloatImage
 type imageEncoder func(io.Writer, image.Image) error
-
-// Compose two Image operations into a single operation.
-// I.e. if h := Compose(f,g), then h(img) == g(f(img))
-func Compose(op1, op2 ImageOp) ImageOp {
-	return func(img *imgproc.FloatImage) *imgproc.FloatImage {
-		return op2(op1(img)) // perform op1, then op2.
-	}
-}
-
-// Simply pass along the image, without modifying it.
-func IdentityOp(img *imgproc.FloatImage) *imgproc.FloatImage {
-	return img
-}
 
 func toOutputEncoder(output string) (imageEncoder, error) {
 	switch output {
@@ -68,8 +55,10 @@ func processFile(inputFile, outputFormat string, encode imageEncoder, op ImageOp
 		return err
 	}
 
-	// perform operations and save
-	return encode(output, op(imgproc.ImageToFloatImage(image)))
+	// convert to floatImage, perform operations, and save
+	fImg := imgproc.ImageToFloatImage(image)
+	op(fImg)
+	return encode(output, fImg)
 }
 
 func printErrAndUsage(err error) {
@@ -77,13 +66,39 @@ func printErrAndUsage(err error) {
 }
 
 func makeHelpMessage(helpRequests []string) string {
-	// TODO
-	return usageMain()
+	
+	// use a byte-buffer for efficiency, similar to using StringBuilder in Java.
+	res := bytes.NewBufferString("Help:\n")
+
+	// iterate over requests, lookup the help string in supported ops map
+	for _, req := range helpRequests {
+		op, found := supported_ops[req]
+		if found {
+			res.WriteString(fmt.Sprintln("\t", req, op.Desc, "\n\t\t", op.Usage))
+		} else { // key unrecognized:
+			res.WriteString(fmt.Sprintln("\t", req, "is not a supported operation"))
+		}
+	}
+	
+	// always append on the overall usage string
+	res.WriteString("\n---\n" + usageMain())
+	return res.String()
 }
 
-func buildOperations(operations []string) ImageOp {
-	// TODO
-	return IdentityOp
+func buildOperations(operations []string) (ImageOp,error) {
+
+	fullOp := IdentityOp 
+
+	for keyword, args := range collectArgs(operations) {
+		op, found := supported_ops[keyword]
+		if found {
+			fullOp = Compose(fullOp, op.Factory(args))
+		} else {
+			return nil, errors.New(keyword + " is not a supported operation")
+		}
+	}
+
+	return fullOp, nil 
 }
 
 func main() {
@@ -109,7 +124,11 @@ func main() {
 	}
 
 	// compose operations 
-	op := buildOperations(operations)
+	op, err := buildOperations(operations)
+	if err != nil {
+		printErrAndUsage(err)
+		return
+	}
 
 	// if input is empty, read from stdin
 	if input == nil || len(input) == 0 {

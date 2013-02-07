@@ -4,7 +4,9 @@
 package main
 
 import (
+	"bytes"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -26,10 +28,43 @@ func usageMain() string {
 		"\t\ta file named \"foo.jpg.png\" being placed in the folder \"./bar/\"\n\n" +
 
 		"\t-do (or -d) specifies the operations(s) to apply to each image.\n" +
+		"\t\tThe operations must be specified as list, separated by '+'.\n" +
+		"\t\tEach operation must be in the form <keyword> par1=v1 par2=v2 ...\n" +
+		"\t\tE.g. \"imgp -i file1 -d scale s=2 + flip o=vert -o p\")\n" +
 		"\t\tIf only image format conversion is required, no operations need to be specified.\n\n" +
 
 		"\tSupported Operations: (run \"imgp -h[elp] operation\" for more details on each operation).\n" +
-		"\t\tNone."
+		listSupportedOps() + "\n"
+}
+
+func listSupportedOps() string {
+	res := bytes.NewBufferString("")
+	for keyword, op := range supported_ops {
+		res.WriteString(fmt.Sprintln("\t\t", keyword, op.Desc))
+	}
+	return res.String()
+}
+
+// a new flag-type: array of strings
+type strArr []string
+
+func (s *strArr) String() string {
+	return strings.Join(*s, "|")
+}
+
+func (s *strArr) Set(value string) error {
+	for _, elem := range strings.Split(value, "|") {
+		*s = append(*s, elem)
+	}
+	return nil
+}
+
+// for suppressing output
+type EmptyWriter struct {
+}
+
+func (e *EmptyWriter) Write(p []byte) (n int, err error) {
+	return len(p), nil // do nothing
 }
 
 // preprocess args:
@@ -43,7 +78,7 @@ func preprocessArgs(args []string) []string {
 			// current arg is the start of a flag
 			if lastIndexStart < index {
 				// copy over previous multi-arg
-				res = append(res, strings.Join(args[lastIndexStart:index], ","))
+				res = append(res, strings.Join(args[lastIndexStart:index], "|"))
 			}
 			res = append(res, arg)
 			lastIndexStart = index + 1
@@ -53,31 +88,9 @@ func preprocessArgs(args []string) []string {
 	// deal with remaining multi-arg (if any)
 	lenArgs := len(args)
 	if lastIndexStart < lenArgs {
-		res = append(res, strings.Join(args[lastIndexStart:lenArgs], ","))
+		res = append(res, strings.Join(args[lastIndexStart:lenArgs], "|"))
 	}
 	return res
-}
-
-// a new flag-type: array of strings
-type strArr []string
-
-func (s *strArr) String() string {
-	return strings.Join(*s, ",")
-}
-
-func (s *strArr) Set(value string) error {
-	for _, elem := range strings.Split(value, ",") {
-		*s = append(*s, elem)
-	}
-	return nil
-}
-
-// for suppressing output
-type EmptyWriter struct {
-}
-
-func (e *EmptyWriter) Write(p []byte) (n int, err error) {
-	return len(p), nil // do nothing
 }
 
 // parse command line args
@@ -110,3 +123,33 @@ func parseArgs() (input, operations, help strArr, output string, err error) {
 	err = flags.Parse(preprocessArgs(os.Args[1:]))
 	return
 }
+
+// convert an array of the form:
+//	 [ keyword1 par11=v11 par12=v12 ... + keyword2 par21=v21 ... ... ]
+// into the (map) form
+//   keyword1: [-par11=v11 -par12=v12 ... ]
+//	 keyword2: [-par21=v21 ... ]
+func collectArgs(ops []string) map[string][]string {
+	res := make(map[string][]string)
+
+	// prepend a dash to each elem in ops:
+	for i := range ops { 
+		ops[i] = "-" + ops[i]
+	}
+	
+	last := 0 // location of the start of the current operation
+	for cur, arg := range ops {
+		if arg == "-+" {
+			res[ops[last][1:]] = ops[last:cur]
+			last = cur + 1
+		}
+	}
+
+	// deal with remaining operation
+	end := len(ops)
+	if last < end  {
+		res[ops[last][1:]] = ops[last:end]
+	}
+	return res
+}
+
